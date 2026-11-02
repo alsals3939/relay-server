@@ -1,0 +1,415 @@
+generator client {
+  provider     = "prisma-client"
+  output       = "../generated/prisma"
+  moduleFormat = "cjs"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+enum GlobalRole {
+  USER
+  SUPERADMIN
+}
+
+enum WorkspaceRole {
+  OWNER
+  ADMIN
+  MEMBER
+}
+
+enum InvitationStatus {
+  PENDING
+  ACCEPTED
+  REVOKED
+  EXPIRED
+}
+
+enum MessageRole {
+  USER
+  ASSISTANT
+}
+
+enum DocumentStatus {
+  PROCESSING
+  READY
+  FAILED
+}
+
+enum AiConfigAssistantStatus {
+  GATHERING
+  READY
+}
+
+enum RoleGroupDraftStatus {
+  PENDING
+  APPROVED
+}
+
+enum OnboardingPlanStatus {
+  ACTIVE
+  COMPLETED
+}
+
+model User {
+  id                        String                     @id @default(uuid())
+  email                     String                     @unique
+  passwordHash              String
+  name                      String
+  globalRole                GlobalRole                 @default(USER)
+  memberships               WorkspaceMember[]
+  ownedWorkspaces           Workspace[]                @relation("WorkspaceOwner")
+  invitationsSent           WorkspaceInvitation[]      @relation("InvitationSender")
+  chatSessions              ChatSession[]
+  aiConfigAssistantSessions AiConfigAssistantSession[]
+  checklistItemCompletions  ChecklistItemCompletion[]
+  onboardingPlans           OnboardingPlan[]
+  createdAt                 DateTime                   @default(now())
+  updatedAt                 DateTime                   @updatedAt
+}
+
+model Workspace {
+  id                        String                     @id @default(uuid())
+  name                      String
+  description               String?
+  ownerId                   String
+  owner                     User                       @relation("WorkspaceOwner", fields: [ownerId], references: [id], onDelete: Restrict)
+  members                   WorkspaceMember[]
+  invitations               WorkspaceInvitation[]
+  roleGroups                RoleGroup[]
+  aiConfigs                 AiConfig[]
+  documents                 Document[]
+  knowledge                 KnowledgeItem[]
+  checklists                Checklist[]
+  chatSessions              ChatSession[]
+  aiConfigAssistantSessions AiConfigAssistantSession[]
+  roleGroupDrafts           RoleGroupDraft[]
+  onboardingPlans           OnboardingPlan[]
+  createdAt                 DateTime                   @default(now())
+  updatedAt                 DateTime                   @updatedAt
+
+  @@index([ownerId])
+}
+
+model WorkspaceMember {
+  id          String                     @id @default(uuid())
+  workspaceId String
+  userId      String
+  role        WorkspaceRole              @default(MEMBER)
+  workspace   Workspace                  @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  user        User                       @relation(fields: [userId], references: [id], onDelete: Cascade)
+  roleGroups  WorkspaceMemberRoleGroup[]
+  joinedAt    DateTime                   @default(now())
+
+  @@unique([workspaceId, userId])
+  @@index([userId])
+}
+
+model WorkspaceInvitation {
+  id          String                         @id @default(uuid())
+  workspaceId String
+  email       String
+  role        WorkspaceRole                  @default(MEMBER)
+  tokenHash   String                         @unique
+  status      InvitationStatus               @default(PENDING)
+  expiresAt   DateTime
+  invitedById String
+  workspace   Workspace                      @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  invitedBy   User                           @relation("InvitationSender", fields: [invitedById], references: [id], onDelete: Cascade)
+  roleGroups  WorkspaceInvitationRoleGroup[]
+  createdAt   DateTime                       @default(now())
+  acceptedAt  DateTime?
+
+  @@index([workspaceId, email])
+}
+
+model RoleGroup {
+  id                String                         @id @default(uuid())
+  workspaceId       String
+  name              String
+  description       String?
+  isDefault         Boolean                        @default(false)
+  position          Int                            @default(0)
+  workspace         Workspace                      @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  members           WorkspaceMemberRoleGroup[]
+  invitations       WorkspaceInvitationRoleGroup[]
+  aiConfig          AiConfig?
+  documents         Document[]
+  knowledge         KnowledgeItem[]
+  checklists        Checklist[]
+  chatSessions      ChatSession[]
+  assistantSessions AiConfigAssistantSession[]
+  draft             RoleGroupDraft?
+  onboardingPlans   OnboardingPlan[]
+  createdAt         DateTime                       @default(now())
+  updatedAt         DateTime                       @updatedAt
+
+  @@unique([workspaceId, name])
+  @@index([workspaceId, position])
+}
+
+model WorkspaceMemberRoleGroup {
+  workspaceMemberId String
+  roleGroupId       String
+  workspaceMember   WorkspaceMember @relation(fields: [workspaceMemberId], references: [id], onDelete: Cascade)
+  roleGroup         RoleGroup       @relation(fields: [roleGroupId], references: [id], onDelete: Cascade)
+  assignedAt        DateTime        @default(now())
+
+  @@id([workspaceMemberId, roleGroupId])
+  @@index([roleGroupId])
+}
+
+model WorkspaceInvitationRoleGroup {
+  invitationId String
+  roleGroupId  String
+  invitation   WorkspaceInvitation @relation(fields: [invitationId], references: [id], onDelete: Cascade)
+  roleGroup    RoleGroup           @relation(fields: [roleGroupId], references: [id], onDelete: Cascade)
+
+  @@id([invitationId, roleGroupId])
+  @@index([roleGroupId])
+}
+
+model AiConfig {
+  id           String    @id @default(uuid())
+  workspaceId  String
+  roleGroupId  String    @unique
+  model        String    @default("gpt-4o-mini")
+  systemPrompt String    @default("당신은 이 조직의 업무 인수인계를 돕는 AI입니다.")
+  temperature  Float     @default(0.3)
+  maxTokens    Int       @default(1200)
+  workspace    Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  roleGroup    RoleGroup @relation(fields: [roleGroupId], references: [id], onDelete: Cascade)
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+
+  @@index([workspaceId])
+}
+
+model Document {
+  id          String         @id @default(uuid())
+  workspaceId String
+  roleGroupId String
+  name        String
+  mimeType    String?
+  fileUrl     String?
+  content     String?
+  status      DocumentStatus @default(PROCESSING)
+  error       String?
+  workspace   Workspace      @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  roleGroup   RoleGroup      @relation(fields: [roleGroupId], references: [id], onDelete: Cascade)
+  chunks      DocumentChunk[]
+  createdAt   DateTime       @default(now())
+  updatedAt   DateTime       @updatedAt
+
+  @@index([workspaceId, roleGroupId])
+}
+
+model DocumentChunk {
+  id          String   @id @default(uuid())
+  documentId  String
+  workspaceId String
+  roleGroupId String
+  content     String
+  embedding   Float[]
+  position    Int
+  document    Document @relation(fields: [documentId], references: [id], onDelete: Cascade)
+  createdAt   DateTime @default(now())
+
+  @@index([workspaceId, roleGroupId])
+  @@index([documentId, position])
+}
+
+model KnowledgeItem {
+  id          String    @id @default(uuid())
+  workspaceId String
+  roleGroupId String
+  question    String
+  answer      String
+  workspace   Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  roleGroup   RoleGroup @relation(fields: [roleGroupId], references: [id], onDelete: Cascade)
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  @@index([workspaceId, roleGroupId])
+}
+
+model Checklist {
+  id          String          @id @default(uuid())
+  workspaceId String
+  roleGroupId String
+  title       String
+  description String?
+  workspace   Workspace       @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  roleGroup   RoleGroup       @relation(fields: [roleGroupId], references: [id], onDelete: Cascade)
+  items       ChecklistItem[]
+  createdAt   DateTime        @default(now())
+  updatedAt   DateTime        @updatedAt
+
+  @@index([workspaceId, roleGroupId])
+}
+
+model ChecklistItem {
+  id          String                    @id @default(uuid())
+  checklistId String
+  title       String
+  description String?
+  position    Int                       @default(0)
+  checklist   Checklist                 @relation(fields: [checklistId], references: [id], onDelete: Cascade)
+  completions ChecklistItemCompletion[]
+  createdAt   DateTime                  @default(now())
+  updatedAt   DateTime                  @updatedAt
+
+  @@index([checklistId, position])
+}
+
+model ChecklistItemCompletion {
+  checklistItemId String
+  userId          String
+  checklistItem   ChecklistItem @relation(fields: [checklistItemId], references: [id], onDelete: Cascade)
+  user            User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+  completedAt     DateTime      @default(now())
+
+  @@id([checklistItemId, userId])
+  @@index([userId])
+}
+
+model ChatSession {
+  id          String        @id @default(uuid())
+  workspaceId String
+  roleGroupId String
+  userId      String
+  title       String        @default("새 대화")
+  isPinned    Boolean       @default(false)
+  archivedAt  DateTime?
+  workspace   Workspace     @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  roleGroup   RoleGroup     @relation(fields: [roleGroupId], references: [id], onDelete: Cascade)
+  user        User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+  messages    ChatMessage[]
+  createdAt   DateTime      @default(now())
+  updatedAt   DateTime      @updatedAt
+
+  @@index([workspaceId, userId, roleGroupId])
+}
+
+model ChatMessage {
+  id        String      @id @default(uuid())
+  sessionId String
+  role      MessageRole
+  content   String
+  citations Json?
+  session   ChatSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  createdAt DateTime    @default(now())
+
+  @@index([sessionId, createdAt])
+}
+
+model AiConfigAssistantSession {
+  id                                String                     @id @default(uuid())
+  workspaceId                       String
+  roleGroupId                       String
+  createdById                       String
+  title                             String                     @default("새 설정 대화")
+  status                            AiConfigAssistantStatus    @default(GATHERING)
+  lastSummary                       String?
+  lastProposedSystemPrompt          String?
+  lastMissingTopics                 String[]                   @default([])
+  lastSuggestedRoleGroupName        String?
+  lastSuggestedRoleGroupDescription String?
+  workspace                         Workspace                  @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  roleGroup                         RoleGroup                  @relation(fields: [roleGroupId], references: [id], onDelete: Cascade)
+  createdBy                         User                       @relation(fields: [createdById], references: [id], onDelete: Cascade)
+  messages                          AiConfigAssistantMessage[]
+  createdAt                         DateTime                   @default(now())
+  updatedAt                         DateTime                   @updatedAt
+
+  @@index([workspaceId, roleGroupId, updatedAt])
+}
+
+model AiConfigAssistantMessage {
+  id        String                   @id @default(uuid())
+  sessionId String
+  role      MessageRole
+  content   String
+  session   AiConfigAssistantSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  createdAt DateTime                 @default(now())
+
+  @@index([sessionId, createdAt])
+}
+
+/// 문서 업로드 승인 시 AI가 한 번에 생성하는 시스템 프롬프트 + FAQ + 5일 로드맵 템플릿 초안.
+/// 사수는 이 초안을 검토 후 원클릭으로 승인한다.
+model RoleGroupDraft {
+  id           String                @id @default(uuid())
+  workspaceId  String
+  roleGroupId  String                @unique
+  status       RoleGroupDraftStatus  @default(PENDING)
+  systemPrompt String
+  faqItems     Json
+  planDays     Json
+  generatedAt  DateTime              @default(now())
+  approvedAt   DateTime?
+  workspace    Workspace             @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  roleGroup    RoleGroup             @relation(fields: [roleGroupId], references: [id], onDelete: Cascade)
+
+  @@index([workspaceId])
+}
+
+/// 신입 한 명의 5일 온보딩 여정. 승인된 RoleGroupDraft.planDays를 복사해 생성되고,
+/// 이후 하루가 끝날 때마다 다음 날 계획이 개인별로 재조정된다.
+model OnboardingPlan {
+  id           String               @id @default(uuid())
+  workspaceId  String
+  roleGroupId  String
+  userId       String
+  status       OnboardingPlanStatus @default(ACTIVE)
+  currentDay   Int                  @default(1)
+  finalSummary String?
+  workspace    Workspace            @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  roleGroup    RoleGroup            @relation(fields: [roleGroupId], references: [id], onDelete: Cascade)
+  user         User                 @relation(fields: [userId], references: [id], onDelete: Cascade)
+  days         OnboardingDay[]
+  createdAt    DateTime             @default(now())
+  updatedAt    DateTime             @updatedAt
+
+  @@unique([workspaceId, roleGroupId, userId])
+  @@index([workspaceId, roleGroupId])
+}
+
+model OnboardingDay {
+  id          String                 @id @default(uuid())
+  planId      String
+  dayNumber   Int
+  goal        String
+  keyConcepts String[]               @default([])
+  plan        OnboardingPlan         @relation(fields: [planId], references: [id], onDelete: Cascade)
+  missions    OnboardingMission[]
+  reflection  OnboardingReflection?
+  createdAt   DateTime               @default(now())
+
+  @@unique([planId, dayNumber])
+}
+
+model OnboardingMission {
+  id            String        @id @default(uuid())
+  dayId         String
+  title         String
+  description   String?
+  checkQuestion String?
+  checkFeedback String?
+  position      Int           @default(0)
+  completed     Boolean       @default(false)
+  completedAt   DateTime?
+  day           OnboardingDay @relation(fields: [dayId], references: [id], onDelete: Cascade)
+
+  @@index([dayId, position])
+}
+
+model OnboardingReflection {
+  id        String        @id @default(uuid())
+  dayId     String        @unique
+  content   String
+  aiSummary String?
+  day       OnboardingDay @relation(fields: [dayId], references: [id], onDelete: Cascade)
+  createdAt DateTime      @default(now())
+}
